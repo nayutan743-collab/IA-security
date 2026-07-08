@@ -45,16 +45,32 @@ async def on_ready():
     print(f"🤖 Logged in as {bot.user.name} ({bot.user.id})")
     print("Bot is fully online and ready!")
 
-# 👑 誰でも（管理者なら）実行できるようにした同期コマンド
+# 👑 【最終兵器】Botが入っているすべてのサーバーに即時強制同期するコマンド
 @bot.command(name="sync")
 @commands.has_permissions(administrator=True)
 async def sync(ctx):
     try:
-        synced = await bot.tree.sync()
-        await ctx.send(f"🔄 {len(synced)} 個のスラッシュコマンドを完全に同期しました！")
+        # 1. まずは世界中の全サーバー共通（グローバル）の同期を投げる
+        synced_global = await bot.tree.sync()
+        
+        # 2. 【ここが重要】Botが入っている全てのサーバーをループして、1つずつ直接最新コマンドを叩き込む
+        synced_guilds_count = 0
+        for guild in bot.guilds:
+            try:
+                bot.tree.copy_global_to(guild=guild)
+                await bot.tree.sync(guild=guild)
+                synced_guilds_count += 1
+            except Exception:
+                continue # 権限エラーなどのサーバーはスキップして次へ
+                
+        await ctx.send(
+            f"🌍 グローバル同期を送信し、さらに現在入っている **{synced_guilds_count}個の全サーバーへ即時強制同期** を完了しました！\n"
+            f"⚠️ 反映を確認するために、Discordアプリを必ず再起動（PC: Ctrl+R / スマホ: タスクキル）してください。"
+        )
     except Exception as e:
-        await ctx.send(f"❌ 同期中にエラーが発生しました。ログを確認してください。")
-        traceback.print_exc()  # 💡 コマンド実行時のエラーを詳細に出力
+        await ctx.send(f"❌ 同期中にエラーが発生しました。")
+        import traceback
+        traceback.print_exc()
 
 # 💡 隠れているすべてのエラーを強制的にログに出す魔術
 @bot.event
