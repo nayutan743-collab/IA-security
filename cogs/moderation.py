@@ -35,15 +35,14 @@ class Moderation(commands.GroupCog, name="mod", description="管理系コマン�
             if k not in self.all_settings[guild_id]: self.all_settings[guild_id][k] = v
         return self.all_settings[guild_id]
 
+    # --- 共通処罰関数 ---
     async def execute_punishment(self, member, channel, action, reason):
-        # 履歴保存
         settings = self.get_guild_settings(str(member.guild.id))
         user_id = str(member.id)
         if user_id not in settings["history"]: settings["history"][user_id] = []
         settings["history"][user_id].append({"action": action, "reason": reason, "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")})
         self.save_settings()
 
-        # 処罰実行
         if action != "delete_only":
             try:
                 if action == "timeout": await member.timeout(datetime.timedelta(minutes=10), reason=reason)
@@ -52,7 +51,6 @@ class Moderation(commands.GroupCog, name="mod", description="管理系コマン�
                 await channel.send(f"⚠️ {member.display_name} を {action.upper()} しました。", delete_after=10)
             except: pass
         
-        # ログ送信
         log_channel = channel.guild.get_channel(settings.get("log_channel_id"))
         if log_channel:
             embed = discord.Embed(title="🚨 処罰履歴ログ", color=discord.Color.red())
@@ -62,6 +60,7 @@ class Moderation(commands.GroupCog, name="mod", description="管理系コマン�
             try: await log_channel.send(embed=embed)
             except: pass
 
+    # --- コマンド類 ---
     @app_commands.command(name="set_log_channel", description="ログチャンネルを設定")
     async def set_log_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         settings = self.get_guild_settings(str(interaction.guild_id))
@@ -134,7 +133,6 @@ class Moderation(commands.GroupCog, name="mod", description="管理系コマン�
         guild_id = str(message.guild.id)
         settings = self.get_guild_settings(guild_id)
         
-        # 1. スパム対策
         if settings.get("spam_protection"):
             uid = message.author.id
             now = time.time()
@@ -145,14 +143,12 @@ class Moderation(commands.GroupCog, name="mod", description="管理系コマン�
                 await self.execute_punishment(message.author, message.channel, settings.get("spam_action", "timeout"), "スパム連投")
                 return
         
-        # 2. NGワード
         for word, action in settings.get("ng_words", {}).items():
             if word in message.content:
                 await message.delete()
                 await self.execute_punishment(message.author, message.channel, action, f"NGワード: {word}")
                 return
 
-        # 3. NG画像
         if message.attachments:
             for att in message.attachments:
                 if att.content_type and att.content_type.startswith("image"):
