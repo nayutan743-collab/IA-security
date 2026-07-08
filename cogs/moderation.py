@@ -9,7 +9,8 @@ import hashlib
 
 SETTING_FILE = "settings.json"
 
-class Moderation(commands.Cog):
+# 💡 @app_commands.guild_only() をクラス全体に適用するための設定
+class Moderation(commands.GroupCog, name="mod", description="管理系コマンドグループ"):
     def __init__(self, bot):
         self.bot = bot
         self.all_settings = self.load_settings()
@@ -33,7 +34,6 @@ class Moderation(commands.Cog):
         if guild_id not in self.all_settings or not isinstance(self.all_settings[guild_id], dict):
             self.all_settings[guild_id] = {}
 
-        # データ構造を「ワード: 処罰」の辞書型に強制統一・自動変換
         if "ng_words" not in self.all_settings[guild_id] or not isinstance(self.all_settings[guild_id]["ng_words"], dict):
             old_words = self.all_settings[guild_id].get("ng_words", [])
             if isinstance(old_words, list):
@@ -78,7 +78,7 @@ class Moderation(commands.Cog):
         except discord.Forbidden:
             await channel.send(f"⚠️ {member.mention} への処罰（{action}）を試みましたが、権限が足りません。", delete_after=10)
 
-    # 📝 NGワードと処罰をセットで追加するコマンド
+    # 📝 NGワード追加（スラッシュコマンド）
     @app_commands.command(name="ng_word_add", description="禁止ワードと、そのワード専用の処罰を設定して追加します")
     @app_commands.describe(word="禁止にするワード", action="このワードを発言した時の処罰")
     @app_commands.choices(
@@ -93,18 +93,16 @@ class Moderation(commands.Cog):
     async def ng_word_add(self, interaction: discord.Interaction, word: str, action: app_commands.Choice[str]):
         guild_id = str(interaction.guild_id)
         settings = self.get_guild_settings(guild_id)
-
-        # 👈 ここでワードごとに選んだ処罰（action.value）を保存します
         settings["ng_words"][word] = action.value
         self.save_settings()
         await interaction.response.send_message(f"🚫 NGワードに「{word}」（処罰: {action.name}）を追加しました。", ephemeral=True)
 
+    # 📝 NGワード削除（スラッシュコマンド）
     @app_commands.command(name="ng_word_remove", description="禁止ワードを削除します")
     @app_commands.checks.has_permissions(administrator=True)
     async def ng_word_remove(self, interaction: discord.Interaction, word: str):
         guild_id = str(interaction.guild_id)
         settings = self.get_guild_settings(guild_id)
-
         if word in settings["ng_words"]:
             del settings["ng_words"][word]
             self.save_settings()
@@ -112,7 +110,7 @@ class Moderation(commands.Cog):
         else:
             await interaction.response.send_message("そのワードは登録されていません。", ephemeral=True)
 
-    # 🖼️ 禁止画像と処罰をセットで追加するコマンド
+    # 🖼️ 禁止画像追加（スラッシュコマンド）
     @app_commands.command(name="ng_image_add", description="禁止画像と、その画像専用の処罰を設定して登録します")
     @app_commands.describe(image="禁止にする画像ファイル", action="この画像が送られた時の処罰")
     @app_commands.choices(
@@ -128,17 +126,15 @@ class Moderation(commands.Cog):
         if not image.content_type or not image.content_type.startswith("image"):
             await interaction.response.send_message("❌ 画像ファイルを添付してください。", ephemeral=True)
             return
-
         await interaction.response.defer(ephemeral=True)
         guild_id = str(interaction.guild_id)
         settings = self.get_guild_settings(guild_id)
         img_hash = await self.get_image_hash(image)
-
-        # 👈 ここで画像ごとに選んだ処罰（action.value）を保存します
         settings["ng_images"][img_hash] = action.value
         self.save_settings()
         await interaction.followup.send(f"🚫 この画像を禁止画像リストに登録しました。（処罰: {action.name}）")
 
+    # 🖼️ 禁止画像クリア（スラッシュコマンド）
     @app_commands.command(name="ng_image_clear", description="禁止画像リストをすべて消去します")
     @app_commands.checks.has_permissions(administrator=True)
     async def ng_image_clear(self, interaction: discord.Interaction):
@@ -148,6 +144,7 @@ class Moderation(commands.Cog):
         self.save_settings()
         await interaction.response.send_message("✅ 禁止画像リストをすべてリセットしました。", ephemeral=True)
 
+    # ⚡ スパム設定（スラッシュコマンド）
     @app_commands.command(name="set_spam_protection", description="スパム対策のON/OFFと処罰方法を設定します")
     @app_commands.choices(
         action=[
@@ -177,22 +174,18 @@ class Moderation(commands.Cog):
         member = message.author
         current_time = time.time()
 
-        # スパム検知
         if settings.get("spam_protection", True):
             user_id = member.id
             if user_id not in self.message_logs:
                 self.message_logs[user_id] = []
-            
             self.message_logs[user_id] = [t for t in self.message_logs[user_id] if current_time - t < 5]
             self.message_logs[user_id].append(current_time)
-
             if len(self.message_logs[user_id]) >= 5:
                 await message.delete()
                 action = settings.get("spam_action", "timeout")
                 await self.execute_punishment(member, message.channel, action, "スパム連投行為のため")
                 return
 
-        # NGワード検知（ワードごとに設定された個別の処罰を実行）
         if settings.get("ng_words"):
             for ng_word, action in settings["ng_words"].items():
                 if ng_word in message.content:
@@ -200,12 +193,10 @@ class Moderation(commands.Cog):
                     await self.execute_punishment(member, message.channel, action, f"NGワード「{ng_word}」発言のため")
                     return
 
-        # 禁止画像検知（画像ごとに設定された個別の処罰を実行）
         if message.attachments and settings.get("ng_images"):
             for attachment in message.attachments:
                 if attachment.content_type and attachment.content_type.startswith("image"):
                     posted_img_hash = await self.get_image_hash(attachment)
-                    
                     if posted_img_hash in settings["ng_images"]:
                         await message.delete()
                         action = settings["ng_images"][posted_img_hash]
