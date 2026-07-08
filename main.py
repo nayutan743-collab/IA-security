@@ -30,5 +30,7 @@ async def on_ready():
     print(f'ログインしました: {bot.user.name}')
 
 # ⚠️ あなたのBotのトークンを入れてください
-TOKEN = ''
-bot.run(TOKEN)
+import os
+
+# Renderの「DISCORD_TOKEN」を読み込む設定にする
+bot.run(os.getenv("DISCORD_TOKEN"))
