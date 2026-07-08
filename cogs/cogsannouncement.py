@@ -1,15 +1,52 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+import json
+import os
+import asyncio
 
-class Announcement(commands.GroupCog, name="announce", description="公式お知らせ作成コマンドグループ"):
+SETTING_FILE = "settings.json"
+
+class Announcement(commands.GroupCog, name="announce", description="公式お知らせ作成・設定コマンドグループ"):
     def __init__(self, bot):
         self.bot = bot
 
-    # 📢 お知らせを送信するスラッシュコマンド
-    @app_commands.command(name="send", description="IA Securityからの公式お知らせ（埋め込み）を作成して送信します")
+    def load_settings(self):
+        if os.path.exists(SETTING_FILE):
+            try:
+                with open(SETTING_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
+
+    def save_settings(self, settings):
+        with open(SETTING_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=4)
+
+    # 📌 【各サーバー用】お知らせを受け取るチャンネルを自由に設定するコマンド
+    @app_commands.command(name="set_channel", description="このサーバーでお知らせを受け取るチャンネルを設定します")
+    @app_commands.describe(channel="お知らせを流すチャンネル")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def announce_set_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        all_settings = self.load_settings()
+        guild_id = str(interaction.guild_id)
+
+        if guild_id not in all_settings:
+            all_settings[guild_id] = {}
+        
+        # 各サーバーの設定に「announce_channel_id」として保存
+        all_settings[guild_id]["announce_channel_id"] = channel.id
+        self.save_settings(all_settings)
+
+        await interaction.response.send_message(
+            f"✅ このサーバーのお知らせ送信先を {channel.mention} に設定しました！", 
+            ephemeral=True
+        )
+
+    # 🌍 【運営専用】設定された各サバのチャンネルへ一斉送信するコマンド
+    @app_commands.command(name="send_all", description="【運営専用】設定された全サーバーのチャンネルに公式お知らせを一斉送信します")
     @app_commands.describe(
-        channel="お知らせを送信するチャンネル",
         title="お知らせのタイトル",
         content="お知らせの本文（改行したい場合は \\n を使ってください）",
         color="左側の縦線の色（デフォルトは青）"
@@ -23,15 +60,16 @@ class Announcement(commands.GroupCog, name="announce", description="公式お知
         ]
     )
     @app_commands.checks.has_permissions(administrator=True)
-    async def announce_send(
+    async def announce_send_all(
         self, 
         interaction: discord.Interaction, 
-        channel: discord.TextChannel, 
         title: str, 
         content: str, 
         color: app_commands.Choice[str] = None
     ):
-        # 🎨 色の判定設定
+        await interaction.response.defer(ephemeral=True)
+
+        # 🎨 色の設定
         embed_color = discord.Color.blue()
         if color:
             if color.value == "red":
@@ -41,29 +79,62 @@ class Announcement(commands.GroupCog, name="announce", description="公式お知
             elif color.value == "gold":
                 embed_color = discord.Color.gold()
 
-        # 文字列内の「\n」を実際の改行に変換する処理
+        # 改行コードの変換
         formatted_content = content.replace("\\n", "\n")
 
-        # 🖼️ 綺麗に整えられた埋め込み（Embed）の作成
+        # 🖼️ 埋め込み（Embed）の作成
         embed = discord.Embed(
             title=f"📢 {title}",
             description=formatted_content,
             color=embed_color
         )
-        
-        # フッターにBot名と実行日時をスタイリッシュに表示
         embed.set_footer(
-            text=f"IA Security 公式アナウンス | 発信者: {interaction.user.display_name}",
+            text="IA Security 公式グローバルアナウンス",
             icon_url=self.bot.user.avatar.url if self.bot.user.avatar else None
         )
         embed.timestamp = discord.utils.utcnow()
 
-        try:
-            # 指定されたチャンネルにお知らせを送信
-            await channel.send(embed=embed)
-            await interaction.response.send_message(f"✅ {channel.mention} に公式お知らせを送信しました！", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.response.send_message("❌ 指定されたチャンネルにメッセージを送信する権限がBotにありません。", ephemeral=True)
+        all_settings = self.load_settings()
+        success_count = 0
+        failed_count = 0
+
+        # 🔄 全サーバーを巡回
+        for guild in self.bot.guilds:
+            guild_id = str(guild.id)
+            target_channel = None
+
+            # 1. もしそのサーバーがチャンネルを設定していれば、そこを取得
+            if guild_id in all_settings and "announce_channel_id" in all_settings[guild_id]:
+                channel_id = all_settings[guild_id]["announce_channel_id"]
+                target_channel = guild.get_channel(channel_id)
+
+            # 2. 設定されていない、またはチャンネルが消えていた場合は、予備として「#お知らせ」などの名前を探す
+            if not target_channel:
+                target_channel = discord.utils.get(guild.text_channels, name="お知らせ")
+
+            # 3. それでもダメなら、そのサーバーで書き込み可能な最初のチャンネルを探す
+            if not target_channel:
+                for channel in guild.text_channels:
+                    if channel.permissions_for(guild.me).send_messages:
+                        target_channel = channel
+                        break
+
+            # 🚀 決定したチャンネルに送信
+            if target_channel:
+                try:
+                    await target_channel.send(embed=embed)
+                    success_count += 1
+                    await asyncio.sleep(0.5)  # レートリミット安全弁
+                except discord.Forbidden:
+                    failed_count += 1
+            else:
+                failed_count += 1
+
+        await interaction.followup.send(
+            f"🚀 **全サーバー個別設定対応の一斉送信が完了しました！**\n"
+            f"✅ 送信成功: {success_count} サーバー\n"
+            f"❌ 送信失敗: {failed_count} サーバー"
+        )
 
 async def setup(bot):
     await bot.add_cog(Announcement(bot))
