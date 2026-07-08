@@ -36,6 +36,11 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
+@bot.event
+async def on_ready():
+    await bot.tree.sync() # これを実行するとDiscordにコマンド選択肢が反映されます
+    print("コマンドを同期しました！")
+
 # 🤖 Botが完全に起動した瞬間に、自動で全サーバーを一発アップデートする設定
 @bot.event
 async def on_ready():
