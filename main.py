@@ -3,6 +3,7 @@ from discord.ext import commands
 import os
 from aiohttp import web
 import asyncio
+import traceback  # 💡 エラーを詳細に表示するためのライブラリ
 
 # --- Renderの強制終了対策（ダミーサーバー） ---
 async def handle(request):
@@ -20,14 +21,11 @@ async def start_server():
 
 class MyBot(commands.Bot):
     def __init__(self):
-        # プレフィックスを暫定で「!」に設定（スラッシュコマンドも動きます）
         super().__init__(command_prefix="!", intents=discord.Intents.all())
 
     async def setup_hook(self):
-        # サーバーを裏で起動
         asyncio.create_task(start_server())
         
-        # cogsフォルダの自動読み込み（フォルダがなくてもエラーにならないように対策）
         if os.path.exists("./cogs"):
             for filename in os.listdir("./cogs"):
                 if filename.endswith(".py"):
@@ -36,10 +34,9 @@ class MyBot(commands.Bot):
                         print(f"Successfully loaded: {filename}")
                     except Exception as e:
                         print(f"Failed to load cog {filename}: {e}")
+                        traceback.print_exc()  # 💡 Cog読み込み時のエラーを詳細に出力
         else:
             print("Warning: 'cogs' directory not found.")
-        
-        await self.tree.sync()
 
 bot = MyBot()
 
@@ -48,9 +45,21 @@ async def on_ready():
     print(f"🤖 Logged in as {bot.user.name} ({bot.user.id})")
     print("Bot is fully online and ready!")
 
-# トークンを環境変数から安全に読み込む
-token = os.getenv("DISCORD_TOKEN")
-if not token:
-    print("CRITICAL ERROR: DISCORD_TOKEN is missing in Render environment variables!")
-else:
-    bot.run(token)
+# 👑 誰でも（管理者なら）実行できるようにした同期コマンド
+@bot.command(name="sync")
+@commands.has_permissions(administrator=True)
+async def sync(ctx):
+    try:
+        synced = await bot.tree.sync()
+        await ctx.send(f"🔄 {len(synced)} 個のスラッシュコマンドを完全に同期しました！")
+    except Exception as e:
+        await ctx.send(f"❌ 同期中にエラーが発生しました。ログを確認してください。")
+        traceback.print_exc()  # 💡 コマンド実行時のエラーを詳細に出力
+
+# 💡 隠れているすべてのエラーを強制的にログに出す魔術
+@bot.event
+async def on_command_error(ctx, error):
+    print(f"🚨 命令エラー発生: {error}")
+    traceback.print_exception(type(error), error, error.__traceback__)
+
+bot.run(os.getenv("DISCORD_TOKEN"))
