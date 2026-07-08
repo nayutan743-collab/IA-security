@@ -3,9 +3,8 @@ from discord.ext import commands
 import os
 from aiohttp import web
 import asyncio
-import traceback  # 💡 エラーを詳細に表示するためのライブラリ
 
-# --- Renderの強制終了対策（ダミーサーバー） ---
+# --- Render対策（ダミーサーバー） ---
 async def handle(request):
     return web.Response(text="IA Security Bot is running!")
 
@@ -17,7 +16,6 @@ async def start_server():
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    print(f"Web server successfully started on port {port}")
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -25,57 +23,45 @@ class MyBot(commands.Bot):
 
     async def setup_hook(self):
         asyncio.create_task(start_server())
-        
         if os.path.exists("./cogs"):
             for filename in os.listdir("./cogs"):
                 if filename.endswith(".py"):
                     try:
                         await self.load_extension(f"cogs.{filename.replace('.py', '')}")
-                        print(f"Successfully loaded: {filename}")
                     except Exception as e:
-                        print(f"Failed to load cog {filename}: {e}")
-                        traceback.print_exc()  # 💡 Cog読み込み時のエラーを詳細に出力
-        else:
-            print("Warning: 'cogs' directory not found.")
+                        print(f"Error: {e}")
 
 bot = MyBot()
 
 @bot.event
 async def on_ready():
-    print(f"🤖 Logged in as {bot.user.name} ({bot.user.id})")
-    print("Bot is fully online and ready!")
+    print(f"🤖 オンライン: {bot.user.name}")
 
-# 👑 【最終兵器】Botが入っているすべてのサーバーに即時強制同期するコマンド
-@bot.command(name="sync")
+# 🧹 【全サーバー救済】他のサバの人に迷惑をかけずにダブりを消し去る究極コマンド
+@bot.command(name="clearall")
 @commands.has_permissions(administrator=True)
-async def sync(ctx):
+async def clearall(ctx):
+    await ctx.send("🚨 全サーバーのダブりコマンドの強制消去を開始します。少々お待ちください...")
+    
     try:
-        # 1. まずは世界中の全サーバー共通（グローバル）の同期を投げる
-        synced_global = await bot.tree.sync()
-        
-        # 2. 【ここが重要】Botが入っている全てのサーバーをループして、1つずつ直接最新コマンドを叩き込む
-        synced_guilds_count = 0
+        # 1. 全世界のサーバーの「個別データ」を完全に白紙に戻す
         for guild in bot.guilds:
             try:
-                bot.tree.copy_global_to(guild=guild)
+                bot.tree.clear_commands(guild=guild)
                 await bot.tree.sync(guild=guild)
-                synced_guilds_count += 1
+                print(f"Cleared guild: {guild.name}")
             except Exception:
-                continue # 権限エラーなどのサーバーはスキップして次へ
+                continue
                 
+        # 2. 全サーバー共通（グローバル）の最新コマンド「1本だけ」を登録する
+        synced = await bot.tree.sync()
+        
         await ctx.send(
-            f"🌍 グローバル同期を送信し、さらに現在入っている **{synced_guilds_count}個の全サーバーへ即時強制同期** を完了しました！\n"
-            f"⚠️ 反映を確認するために、Discordアプリを必ず再起動（PC: Ctrl+R / スマホ: タスクキル）してください。"
+            f"✨ **完全大掃除が完了しました！** ✨\n"
+            f"Botが入っている全てのサーバーのダブりが消え、最新のコマンド（{len(synced)}個）に一本化されました！\n\n"
+            f"※ 他のサーバーの人たちも、Discordアプリを再起動（スマホならアプリ落として開き直す、PCならCtrl+R）すれば、ダブりが消えて1個になっています！"
         )
     except Exception as e:
-        await ctx.send(f"❌ 同期中にエラーが発生しました。")
-        import traceback
-        traceback.print_exc()
-
-# 💡 隠れているすべてのエラーを強制的にログに出す魔術
-@bot.event
-async def on_command_error(ctx, error):
-    print(f"🚨 命令エラー発生: {error}")
-    traceback.print_exception(type(error), error, error.__traceback__)
+        await ctx.send(f"❌ エラーが発生しました: {e}")
 
 bot.run(os.getenv("DISCORD_TOKEN"))
