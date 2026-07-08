@@ -9,6 +9,91 @@ import hashlib
 
 SETTING_FILE = "settings.json"
 
+class Moderation(commands.GroupCog, name="mod", description="管理系コマンドグループ"):
+    def __init__(self, bot):
+        self.bot = bot
+        self.all_settings = self.load_settings()
+        self.message_logs = {}
+
+    # --- 設定の読み書き ---
+    def load_settings(self):
+        if os.path.exists(SETTING_FILE):
+            try:
+                with open(SETTING_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"Error loading json: {e}")
+                return {}
+        return {}
+
+    def save_settings(self):
+        with open(SETTING_FILE, "w", encoding="utf-8") as f:
+            json.dump(self.all_settings, f, ensure_ascii=False, indent=4)
+
+    def get_guild_settings(self, guild_id: str):
+        if guild_id not in self.all_settings or not isinstance(self.all_settings[guild_id], dict):
+            self.all_settings[guild_id] = {}
+        
+        # 必要なキーの初期化
+        defaults = {"ng_words": {}, "ng_images": {}, "spam_protection": True, "spam_action": "timeout", "log_channel_id": None}
+        for key, value in defaults.items():
+            if key not in self.all_settings[guild_id]:
+                self.all_settings[guild_id][key] = value
+        return self.all_settings[guild_id]
+
+    # --- ログ送信関数 ---
+    async def send_mod_log(self, guild: discord.Guild, member: discord.Member, action: str, reason: str):
+        settings = self.get_guild_settings(str(guild.id))
+        log_channel_id = settings.get("log_channel_id")
+        
+        if log_channel_id:
+            log_channel = guild.get_channel(log_channel_id)
+            if log_channel:
+                embed = discord.Embed(title="🚨 処罰履歴ログ", color=discord.Color.red(), timestamp=discord.utils.utcnow())
+                embed.add_field(name="対象ユーザー", value=f"{member.mention} (ID: {member.id})", inline=False)
+                embed.add_field(name="処罰内容", value=action, inline=True)
+                embed.add_field(name="理由", value=reason, inline=True)
+                embed.set_footer(text="IA Security 防衛システム")
+                try:
+                    await log_channel.send(embed=embed)
+                except:
+                    pass
+
+    async def execute_punishment(self, member: discord.Member, channel, action, reason):
+        log_action = action
+        if action == "delete_only":
+            await channel.send(f"{member.mention} 該当メッセージを削除しました。", delete_after=5)
+            return
+
+        try:
+            if action == "timeout":
+                await member.timeout(datetime.timedelta(minutes=10), reason=reason)
+                await channel.send(f"{member.mention} 規約違反のため、タイムアウトにしました。", delete_after=10)
+            elif action == "kick":
+                await member.kick(reason=reason)
+                await channel.send(f"🚨 {member.display_name} をキックしました。")
+            elif action == "ban":
+                await member.ban(reason=reason, delete_message_days=1)
+                await channel.send(f"🚫 {member.display_name} をBANしました。")
+            
+            # 処罰実行後にログを飛ばす
+            await self.send_mod_log(member.guild, member, log_action, reason)
+            
+        except discord.Forbidden:
+            await channel.send("⚠️ 権限が足りず処罰を実行できませんでした。", delete_after=10)
+
+    # --- コマンド類 ---
+    @app_commands.command(name="set_log_channel", description="処罰ログを送信するチャンネルを設定します")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_log_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        settings = self.get_guild_settings(str(interaction.guild_id))
+        settings["log_channel_id"] = channel.id
+        self.save_settings()
+        await interaction.response.send_message(f"✅ ログチャンネルを {channel.mention} に設定しました。", ephemeral=True)
+
+    # (以下、以前の ng_word_add や on_message などをそのまま記述)
+    # ... (前述のコードと結合してください)
+
 # 💡 @app_commands.guild_only() をクラス全体に適用するための設定
 class Moderation(commands.GroupCog, name="mod", description="管理系コマンドグループ"):
     def __init__(self, bot):
