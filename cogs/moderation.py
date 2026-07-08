@@ -6,7 +6,6 @@ import os
 import time
 import datetime
 import hashlib
-from typing import Optional
 
 SETTING_FILE = "settings.json"
 
@@ -36,6 +35,7 @@ class Moderation(commands.GroupCog, name="mod", description="管理系コマン�
             if k not in self.all_settings[guild_id]: self.all_settings[guild_id][k] = v
         return self.all_settings[guild_id]
 
+    # --- ログ送信 ---
     async def send_mod_log(self, guild, member, action, reason):
         settings = self.get_guild_settings(str(guild.id))
         log_channel = guild.get_channel(settings.get("log_channel_id"))
@@ -47,33 +47,27 @@ class Moderation(commands.GroupCog, name="mod", description="管理系コマン�
             try: await log_channel.send(embed=embed)
             except: pass
 
+    # --- 処罰実行 ---
     async def execute_punishment(self, member, channel, action, reason):
         if action == "delete_only":
-            await channel.send(f"{member.mention} メッセージを削除しました。", delete_after=5)
-            return
-        try:
-            if action == "timeout": await member.timeout(datetime.timedelta(minutes=10), reason=reason)
-            elif action == "kick": await member.kick(reason=reason)
-            elif action == "ban": await member.ban(reason=reason, delete_message_days=1)
-            await channel.send(f"⚠️ {member.display_name} を {action.upper()} しました。", delete_after=10)
-            await self.send_mod_log(member.guild, member, action, reason)
-        except: pass
+            await channel.send(f"{member.mention} 該当メッセージを削除しました。", delete_after=5)
+        else:
+            try:
+                if action == "timeout": await member.timeout(datetime.timedelta(minutes=10), reason=reason)
+                elif action == "kick": await member.kick(reason=reason)
+                elif action == "ban": await member.ban(reason=reason, delete_message_days=1)
+                await channel.send(f"⚠️ {member.display_name} を {action.upper()} しました。", delete_after=10)
+            except: pass
+        await self.send_mod_log(member.guild, member, action, reason)
 
-    # --- コマンド ---
-    @app_commands.command(name="set_log_channel", description="ログチャンネルを設定")
-    async def set_log_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        settings = self.get_guild_settings(str(interaction.guild_id))
-        settings["log_channel_id"] = channel.id
-        self.save_settings()
-        await interaction.response.send_message(f"✅ ログチャンネルを {channel.mention} に設定しました。", ephemeral=True)
-
+    # --- コマンド類 ---
     @app_commands.command(name="ng_word_add", description="NGワードを追加")
     @app_commands.choices(action=[app_commands.Choice(name=n, value=v) for n, v in [("削除", "delete_only"), ("タイムアウト", "timeout"), ("キック", "kick"), ("BAN", "ban")]])
     async def ng_word_add(self, interaction: discord.Interaction, word: str, action: app_commands.Choice[str]):
         settings = self.get_guild_settings(str(interaction.guild_id))
         settings["ng_words"][word] = action.value
         self.save_settings()
-        await interaction.response.send_message(f"🚫 {word} を登録しました。", ephemeral=True)
+        await interaction.response.send_message(f"🚫 「{word}」を登録しました。", ephemeral=True)
 
     @app_commands.command(name="ng_image_add", description="禁止画像を追加")
     @app_commands.choices(action=[app_commands.Choice(name=n, value=v) for n, v in [("削除", "delete_only"), ("タイムアウト", "timeout"), ("キック", "kick"), ("BAN", "ban")]])
@@ -92,12 +86,43 @@ class Moderation(commands.GroupCog, name="mod", description="管理系コマン�
         settings["spam_protection"] = enable
         settings["spam_action"] = action.value
         self.save_settings()
-        await interaction.response.send_message(f"⚡ スパム対策: {'有効' if enable else '無効'}", ephemeral=True)
+        await interaction.response.send_message(f"⚡ スパム対策を {'有効' if enable else '無効'} に設定しました。", ephemeral=True)
 
+    # --- 防衛ロジック (on_message) ---
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # (検知ロジックは以前のまま保持)
-        pass
+        if not message.guild or message.author.bot or message.author.guild_permissions.administrator: return
+        guild_id = str(message.guild.id)
+        settings = self.get_guild_settings(guild_id)
+        member = message.author
+
+        # 1. スパム対策
+        if settings.get("spam_protection"):
+            user_id = member.id
+            now = time.time()
+            self.message_logs.setdefault(user_id, []).append(now)
+            self.message_logs[user_id] = [t for t in self.message_logs[user_id] if now - t < 5]
+            if len(self.message_logs[user_id]) >= 5:
+                await message.delete()
+                await self.execute_punishment(member, message.channel, settings.get("spam_action", "timeout"), "スパム行為")
+                return
+
+        # 2. NGワード
+        for word, action in settings.get("ng_words", {}).items():
+            if word in message.content:
+                await message.delete()
+                await self.execute_punishment(member, message.channel, action, f"NGワード: {word}")
+                return
+
+        # 3. NG画像
+        if message.attachments:
+            for att in message.attachments:
+                if att.content_type and att.content_type.startswith("image"):
+                    h = hashlib.md5(await att.read()).hexdigest()
+                    if h in settings.get("ng_images", {}):
+                        await message.delete()
+                        await self.execute_punishment(member, message.channel, settings["ng_images"][h], "禁止画像")
+                        return
 
 async def setup(bot):
     await bot.add_cog(Moderation(bot))
